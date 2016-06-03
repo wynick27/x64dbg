@@ -3,261 +3,182 @@
 #include "memory.h"
 #include "threading.h"
 
-struct XrefInfo_t
+struct XREFSINFO
 {
     char mod[MAX_MODULE_SIZE];
     duint address;
+    XREFTYPE type;
     std::unordered_map<duint, XREF_RECORD> references;
-    size_t jmp_count;
-    size_t call_count;
 };
 
-std::unordered_map<duint, XrefInfo_t> references;
+struct XrefSerializer : JSONWrapper<XREFSINFO>
+{
+    bool Save(const XREFSINFO & value) override
+    {
+        setString("module", value.mod);
+        setHex("address", value.address);
+        auto references = json_array();
+        for(const auto & itr : value.references)
+        {
+            auto reference = json_object();
+            json_object_set_new(reference, "addr", json_hex(itr.second.addr));
+            json_object_set_new(reference, "type", json_hex(itr.second.type));
+            json_array_append_new(references, reference);
+        }
+        set("references", references);
+        return true;
+    }
+
+    bool Load(XREFSINFO & value) override
+    {
+        if(!getString("module", value.mod) ||
+                !getHex("address", value.address))
+            return false;
+        auto references = get("references");
+        if(!references)
+            return false;
+        value.type = XREF_DATA;
+        size_t i;
+        JSON reference;
+        json_array_foreach(references, i, reference)
+        {
+            XREF_RECORD record;
+            record.addr = duint(json_hex_value(json_object_get(reference, "addr")));
+            record.type = XREFTYPE(json_hex_value(json_object_get(reference, "type")));
+            value.type = max(record.type, value.type);
+            value.references.insert({ record.addr, record });
+        }
+        return true;
+    }
+};
+
+struct Xrefs : SerializableModuleHashMap<LockCrossReferences, XREFSINFO, XrefSerializer>
+{
+    void AdjustValue(XREFSINFO & value) const override
+    {
+        value.address += ModBaseFromName(value.mod);
+    }
+
+protected:
+    const char* jsonKey() const override
+    {
+        return "xrefs";
+    }
+
+    duint makeKey(const XREFSINFO & value) const override
+    {
+        return ModHashFromName(value.mod) + value.address;
+    }
+};
+
+static Xrefs xrefs;
 
 bool XrefAdd(duint Address, duint From)
 {
-
     // Make sure memory is readable
-    if(!MemIsValidReadPtr(Address))
+    if(!MemIsValidReadPtr(Address) || !MemIsValidReadPtr(From))
         return false;
 
     // Fail if boundary exceeds module size
-    const duint moduleBase = ModBaseFromAddr(Address);
+    auto moduleBase = ModBaseFromAddr(Address);
 
     if(moduleBase != ModBaseFromAddr(From))
         return false;
-
-    duint addrHash = ModHashFromAddr(Address);
-    duint fromHash = ModHashFromAddr(From);
 
     BASIC_INSTRUCTION_INFO instInfo;
     DbgDisasmFastAt(From, &instInfo);
 
     XREF_RECORD xrefRecord;
     xrefRecord.addr = From - moduleBase;
+    if(instInfo.call)
+        xrefRecord.type = XREF_CALL;
+    else if(instInfo.branch)
+        xrefRecord.type = XREF_JMP;
+    else
+        xrefRecord.type = XREF_DATA;
 
-    strtok(instInfo.instruction, " ");
-    strtok(NULL, " ");
-    strcpy_s(xrefRecord.inst, instInfo.instruction);
-
-
-    // Insert to global table
     EXCLUSIVE_ACQUIRE(LockCrossReferences);
-    if(references.find(addrHash) == references.end())
+    auto & mapData = xrefs.GetDataUnsafe();
+    auto key = Xrefs::VaKey(Address);
+    auto found = mapData.find(key);
+    if(found == mapData.end())
     {
-        XrefInfo_t xref;
-        ModNameFromAddr(Address, xref.mod, true);
-        xref.address = Address - moduleBase;
-        xref.jmp_count = 0;
-        xref.call_count = 0;
-        xref.references[fromHash] = xrefRecord;
-
-        references[addrHash] = xref;
+        XREFSINFO info;
+        if(!ModNameFromAddr(Address, info.mod, true))
+            *info.mod = '\0';
+        info.address = Address - moduleBase;
+        info.type = xrefRecord.type;
+        info.references.insert({ xrefRecord.addr, xrefRecord });
+        mapData.insert({ key, info });
     }
     else
     {
-        references[addrHash].references[fromHash] = xrefRecord;
+        found->second.references.insert({ xrefRecord.addr, xrefRecord });
+        found->second.type = max(found->second.type, xrefRecord.type);
     }
-    if(instInfo.call)
-        references[addrHash].call_count++;
-    else if(instInfo.branch)
-        references[addrHash].jmp_count++;
-
     return true;
 }
 
 bool XrefGet(duint Address, XREF_INFO* List)
 {
-    const duint moduleBase = ModBaseFromAddr(Address);
-
-    duint addrHash = ModHashFromAddr(Address);
-
     SHARED_ACQUIRE(LockCrossReferences);
-
-    auto found = references.find(addrHash);
-
-
-    if(found == references.end())
+    auto & mapData = xrefs.GetDataUnsafe();
+    auto found = mapData.find(Xrefs::VaKey(Address));
+    if(found == mapData.end())
         return false;
-
     if(List->refcount != found->second.references.size())
-    {
-
         return false;
-    }
-
-
-    strcpy_s(List->mod, found->second.mod);
-
-    XREF_RECORD* ptr = List->references;
-
-    for(auto iter = found->second.references.begin(); iter != found->second.references.end(); iter++)
+    auto moduleBase = ModBaseFromAddr(Address);
+    auto ptr = List->references;
+    for(const auto & itr : found->second.references)
     {
-        ptr->addr = iter->second.addr + moduleBase;
-        strcpy_s(ptr->inst, iter->second.inst);
-        ptr++;
+        *ptr = itr.second;
+        ptr->addr += moduleBase;
+        ++ptr;
     }
-
-
     return true;
 }
 
-size_t XrefGetCount(duint Address)
+duint XrefGetCount(duint Address)
 {
-    const duint addressHash = ModHashFromAddr(Address);
-
     SHARED_ACQUIRE(LockCrossReferences);
-    auto found = references.find(addressHash);
-    return found == references.end() ? 0 : found->second.references.size();
+    auto & mapData = xrefs.GetDataUnsafe();
+    auto found = mapData.find(Xrefs::VaKey(Address));
+    return found == mapData.end() ? 0 : found->second.references.size();
 }
 
 XREFTYPE XrefGetType(duint Address)
 {
-
-    const duint addressHash = ModHashFromAddr(Address);
-
     SHARED_ACQUIRE(LockCrossReferences);
-    auto found = references.find(addressHash);
-    if(found == references.end())
-        return XREF_NONE;
-    else if(found->second.jmp_count > 0)
-        return XREF_JMP;
-    else if(found->second.call_count > 0)
-        return XREF_CALL;
-    return XREF_NONE;
+    auto & mapData = xrefs.GetDataUnsafe();
+    auto found = mapData.find(Xrefs::VaKey(Address));
+    return found == mapData.end() ? XREF_NONE : found->second.type;
 }
 
 bool XrefDeleteAll(duint Address)
 {
-
-    const duint addressHash = ModHashFromAddr(Address);
-
-    EXCLUSIVE_ACQUIRE(LockCrossReferences);
-    //auto found = references.find(Address);
-
-    return (references.erase(addressHash) > 0);
+    return xrefs.Delete(Xrefs::VaKey(Address));
 }
 
-void XrefDelRange(duint Start, duint End, bool DeleteManual)
+void XrefDelRange(duint Start, duint End)
 {
-
-    // 0x00000000 - 0xFFFFFFFF
-    if(Start == 0 && End == ~0)
+    xrefs.DeleteRange(Start, End, [](duint start, duint end, const XREFSINFO & value)
     {
-        XrefClear();
-    }
-    else
-    {
-        // The start and end address must be in the same module
-        duint moduleBase = ModBaseFromAddr(Start);
-
-        if(moduleBase != ModBaseFromAddr(End))
-            return;
-
-        // Convert these to a relative offset
-        Start -= moduleBase;
-        End -= moduleBase;
-
-        EXCLUSIVE_ACQUIRE(LockCrossReferences);
-        for(auto itr = references.begin(); itr != references.end();)
-        {
-            const auto & currentAddr = itr->second.address;
-
-            // [Start, End]
-            if(currentAddr >= Start && currentAddr <= End)
-                itr = references.erase(itr);
-            else
-                ++itr;
-        }
-    }
+        return value.address >= start && value.address <= end;
+    });
 }
 
 void XrefCacheSave(JSON Root)
 {
-    EXCLUSIVE_ACQUIRE(LockCrossReferences);
-
-    // Allocate JSON object array
-    const JSON jsonXrefs = json_array();
-
-
-    for(auto & i : references)
-    {
-        JSON currentXref = json_object();
-
-        json_object_set_new(currentXref, "module", json_string(i.second.mod));
-        json_object_set_new(currentXref, "address", json_hex(i.second.address));
-        json_object_set_new(currentXref, "jmp_count", json_hex(i.second.jmp_count));
-        json_object_set_new(currentXref, "call_count", json_hex(i.second.call_count));
-
-        JSON references = json_array();
-        for(auto & record : i.second.references)
-        {
-            JSON currentRecord = json_object();
-            json_object_set_new(currentRecord, "inst", json_string(record.second.inst));
-            json_object_set_new(currentRecord, "addr", json_hex(record.second.addr));
-            json_array_append_new(references, currentRecord);
-        }
-
-        json_object_set_new(currentXref, "references", references);
-
-        json_array_append_new(jsonXrefs, currentXref);
-
-    }
-
-    if(json_array_size(jsonXrefs))
-        json_object_set(Root, "xrefs", jsonXrefs);
-
-    // Decrease reference count to avoid leaking memory
-
-    json_decref(jsonXrefs);
+    xrefs.CacheSave(Root);
 }
 
 void XrefCacheLoad(JSON Root)
 {
-    EXCLUSIVE_ACQUIRE(LockCrossReferences);
-
-    // Delete existing entries
-    references.clear();
-
-    const JSON jsonXrefs = json_object_get(Root, "xrefs");
-
-    size_t i, j;
-    JSON value, record;
-    json_array_foreach(jsonXrefs, i, value)
-    {
-        XrefInfo_t xrefinfo;
-
-        // Copy module name
-        const char* mod = json_string_value(json_object_get(value, "module"));
-
-        if(mod && *mod && strlen(mod) < MAX_MODULE_SIZE)
-            strcpy_s(xrefinfo.mod, mod);
-
-        xrefinfo.address = (duint)json_hex_value(json_object_get(value, "address"));
-        xrefinfo.jmp_count = (duint)json_hex_value(json_object_get(value, "jmp_count"));
-        xrefinfo.call_count = (duint)json_hex_value(json_object_get(value, "call_count"));
-
-        JSON jsonRecords = json_object_get(value, "references");
-        // Load records
-        json_array_foreach(jsonRecords, j, record)
-        {
-            XREF_RECORD xrefRecord;
-            xrefRecord.addr = json_hex_value(json_object_get(record, "addr"));
-            const char* inst = json_string_value(json_object_get(record, "inst"));
-            strcpy_s(xrefRecord.inst, inst);
-            xrefinfo.references.insert(std::make_pair(ModHashFromName(xrefinfo.mod) + xrefRecord.addr, xrefRecord));
-        }
-
-        const duint key = ModHashFromName(xrefinfo.mod) + xrefinfo.address;
-        references.insert(std::make_pair(key, xrefinfo));
-    }
-
-
-
+    xrefs.CacheLoad(Root);
 }
 
 void XrefClear()
 {
-    EXCLUSIVE_ACQUIRE(LockCrossReferences);
-    references.clear();
+    xrefs.Clear();
 }

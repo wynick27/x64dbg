@@ -1,12 +1,9 @@
 #ifndef XREFBROWSEDIALOG_H
 #define XREFBROWSEDIALOG_H
 
+#include "Bridge.h"
 #include <QDialog>
 #include <QListWidgetItem>
-#include <capstone_wrapper.h>
-#include "XrefBrowseDialog.h"
-#include "Bridge.h"
-
 
 namespace Ui
 {
@@ -21,12 +18,11 @@ public:
     explicit XrefBrowseDialog(QWidget* parent, duint address);
     ~XrefBrowseDialog();
 
-public slots:
-
-    void on_buttonCancel_clicked();
-    void on_currentRow_changed(int);
-    void on_item_DoubleClicked(QListWidgetItem*);
-    void on_selection_changed();
+private slots:
+    void on_listWidget_itemDoubleClicked(QListWidgetItem* item);
+    void on_listWidget_itemSelectionChanged();
+    void on_listWidget_currentRowChanged(int currentRow);
+    void on_XrefBrowseDialog_rejected();
 
 private:
     Ui::XrefBrowseDialog* ui;

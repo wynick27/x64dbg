@@ -439,6 +439,10 @@ void CPUDisassembly::setupRightClickContextMenu()
 
     mMenuBuilder->addMenu(makeMenu(QIcon(":/icons/images/goto.png"), tr("Go to")), gotoMenu);
     mMenuBuilder->addSeparator();
+    mMenuBuilder->addAction(makeShortcutAction(QIcon(":/icons/images/xrefs.png"), tr("xrefs..."), SLOT(gotoXrefSlot()), "ActionXrefs"), [this](QMenu*)
+    {
+        return mXrefInfo.refcount > 0;
+    });
 
     MenuBuilder* searchMenu = new MenuBuilder(this);
     MenuBuilder* mSearchRegionMenu = new MenuBuilder(this);
@@ -907,7 +911,7 @@ void CPUDisassembly::gotoEndSlot()
 
 void CPUDisassembly::gotoXrefSlot()
 {
-    if(!DbgIsDebugging())
+    if(!DbgIsDebugging() || !mXrefInfo.refcount)
         return;
     XrefBrowseDialog xrefDlg(this, getSelectedVa());
     xrefDlg.exec();

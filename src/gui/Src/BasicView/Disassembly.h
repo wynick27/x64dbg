@@ -203,6 +203,7 @@ protected:
     bool mHighlightingMode;
     MemoryPage* mMemPage;
     bool mShowMnemonicBrief;
+    XREF_INFO mXrefInfo;
 };
 
 #endif // DISASSEMBLY_H

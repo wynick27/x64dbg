@@ -738,7 +738,6 @@ BRIDGE_IMPEXP bool DbgLoopDel(int depth, duint addr)
     return true;
 }
 
-
 BRIDGE_IMPEXP size_t DbgGetXrefCountAt(duint addr)
 {
     return _dbg_sendmessage(DBG_GET_XREF_COUNT_AT, (void*)addr, 0);

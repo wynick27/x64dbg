@@ -1,5 +1,6 @@
 #include "_global.h"
 #include "threading.h"
+#include "module.h"
 
 template<class TValue>
 class JSONWrapper
@@ -26,7 +27,10 @@ protected:
     template<size_t TSize>
     bool getString(const char* key, char(&_Dest)[TSize]) const
     {
-        auto str = json_string_value(json_object_get(mJson, key));
+        auto jsonValue = get(key);
+        if(!jsonValue)
+            return false;
+        auto str = json_string_value(jsonValue);
         if(str && strlen(str) < TSize)
         {
             strcpy_s(_Dest, str);
@@ -79,7 +83,6 @@ protected:
         return true;
     }
 
-private:
     // ReSharper disable once CppMemberFunctionMayBeConst
     void set(const char* key, JSON value)
     {
@@ -237,6 +240,11 @@ public:
         if(valuePtr)
             *valuePtr = value;
         return true;
+    }
+
+    TMap & GetDataUnsafe()
+    {
+        return mMap;
     }
 
     virtual void AdjustValue(TValue & value) const = 0;

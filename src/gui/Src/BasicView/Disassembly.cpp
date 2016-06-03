@@ -48,7 +48,6 @@ Disassembly::Disassembly(QWidget* parent) : AbstractTableView(parent)
 
     mXrefInfo.refcount = 0;
 
-
     // Slots
     connect(Bridge::getBridge(), SIGNAL(repaintGui()), this, SLOT(reloadData()));
     connect(Bridge::getBridge(), SIGNAL(updateDump()), this, SLOT(reloadData()));
@@ -883,43 +882,48 @@ int Disassembly::paintJumpsGraphic(QPainter* painter, int x, int y, dsint addr, 
     {
         duint max = selVa, min = selVa;
         showXref = true;
-        for(int i = 0; i < mXrefInfo.refcount; i++)
+        int jmpcount = 0;
+        for(duint i = 0; i < mXrefInfo.refcount; i++)
         {
+            if(mXrefInfo.references[i].type != XREF_JMP)
+                continue;
+            jmpcount++;
             if(curVa == mXrefInfo.references[i].addr)
-            {
                 wPict = GD_VertHori;
-            }
             if(mXrefInfo.references[i].addr > max)
                 max = mXrefInfo.references[i].addr;
             if(mXrefInfo.references[i].addr < min)
                 min = mXrefInfo.references[i].addr;
         }
-        if(curVa == selVa)
+        if(jmpcount)
         {
-            if(max == selVa)
+            if(curVa == selVa)
             {
-                wPict = GD_HeadFromTop;
-            }
-            else if(min == selVa)
-            {
-                wPict = GD_HeadFromBottom;
-            }
-            else if(max > selVa && min < selVa)
-            {
-                wPict = GD_HeadFromBoth;
-            }
+                if(max == selVa)
+                {
+                    wPict = GD_HeadFromTop;
+                }
+                else if(min == selVa)
+                {
+                    wPict = GD_HeadFromBottom;
+                }
+                else if(max > selVa && min < selVa)
+                {
+                    wPict = GD_HeadFromBoth;
+                }
 
+            }
+            else if(curVa < selVa && curVa == min)
+            {
+                wPict =  GD_FootToBottom;
+            }
+            else if(curVa > selVa && curVa == max)
+            {
+                wPict = GD_FootToTop;
+            }
+            if(wPict == GD_Nothing && curVa > min && curVa < max)
+                wPict = GD_Vert;
         }
-        else if(curVa < selVa && curVa == min)
-        {
-            wPict =  GD_FootToBottom;
-        }
-        else if(curVa > selVa && curVa == max)
-        {
-            wPict = GD_FootToTop;
-        }
-        if(wPict == GD_Nothing && curVa > min && curVa < max)
-            wPict = GD_Vert;
     }
 
     GraphicJumpDirection_t curInstDir = GJD_Nothing;

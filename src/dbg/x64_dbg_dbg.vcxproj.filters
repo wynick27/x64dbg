@@ -320,6 +320,9 @@
     <ClCompile Include="recursiveanalysis.cpp">
       <Filter>Source Files\Analysis</Filter>
     </ClCompile>
+    <ClCompile Include="xrefsanalysis.cpp">
+      <Filter>Source Files\Analysis</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="x64_dbg.h">
@@ -701,6 +704,9 @@
       <Filter>Header Files\Interfaces/Exports\_scriptapi</Filter>
     </ClInclude>
     <ClInclude Include="recursiveanalysis.h">
+      <Filter>Header Files\Analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="xrefsanalysis.h">
       <Filter>Header Files\Analysis</Filter>
     </ClInclude>
   </ItemGroup>
