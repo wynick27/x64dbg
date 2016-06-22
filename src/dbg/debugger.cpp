@@ -71,6 +71,7 @@ static duint timeWastedDebugging = 0;
 char szFileName[MAX_PATH] = "";
 char szSymbolCachePath[MAX_PATH] = "";
 char sqlitedb[deflen] = "";
+std::vector<std::pair<duint, duint>> RunToUserCodeBreakpoints;
 PROCESS_INFORMATION* fdProcessInfo = &g_pi;
 HANDLE hActiveThread;
 HANDLE hProcessToken;
@@ -157,8 +158,6 @@ static DWORD WINAPI timeWastedCounterThread(void* ptr)
 
 void dbginit()
 {
-    ExceptionCodeInit();
-    ErrorCodeInit();
     hMemMapThread = CreateThread(nullptr, 0, memMapThread, nullptr, 0, nullptr);
     hTimeWastedCounterThread = CreateThread(nullptr, 0, timeWastedCounterThread, nullptr, 0, nullptr);
 }
@@ -612,6 +611,33 @@ void cbMemoryBreakpoint(void* ExceptionAddress)
     cbGenericBreakpoint(BPMEMORY, ExceptionAddress);
 }
 
+void cbRunToUserCodeBreakpoint(void* ExceptionAddress)
+{
+    EXCLUSIVE_ACQUIRE(LockRunToUserCode);
+    hActiveThread = ThreadGetHandle(((DEBUG_EVENT*)GetDebugData())->dwThreadId);
+    auto CIP = GetContextDataEx(hActiveThread, UE_CIP);
+    auto symbolicname = SymGetSymbolicName(CIP);
+    dprintf("User code reached at %s (" fhex ")!", symbolicname.c_str(), CIP);
+    for(auto i : RunToUserCodeBreakpoints)
+    {
+        BREAKPOINT bp;
+        if(!BpGet(i.first, BPMEMORY, nullptr, &bp))
+            RemoveMemoryBPX(i.first, i.second);
+    }
+    RunToUserCodeBreakpoints.clear();
+    lock(WAITID_RUN);
+    EXCLUSIVE_RELEASE();
+    PLUG_CB_PAUSEDEBUG pauseInfo;
+    pauseInfo.reserved = nullptr;
+    plugincbcall(CB_PAUSEDEBUG, &pauseInfo);
+    _dbg_dbgtraceexecute(CIP);
+    GuiSetDebugState(paused);
+    DebugUpdateGui(GetContextDataEx(hActiveThread, UE_CIP), true);
+    SetForegroundWindow(GuiGetWindowHandle());
+    bSkipExceptions = false;
+    wait(WAITID_RUN);
+}
+
 void cbLibrarianBreakpoint(void* lpData)
 {
     bBreakOnNextDll = true;
@@ -955,7 +981,7 @@ static void cbCreateProcess(CREATE_PROCESS_DEBUG_INFO* CreateProcessInfo)
     // Init program database
     DbLoad(DbLoadSaveType::DebugData);
 
-    SafeSymSetOptions(SYMOPT_DEBUG | SYMOPT_LOAD_LINES | SYMOPT_ALLOW_ABSOLUTE_SYMBOLS | SYMOPT_FAVOR_COMPRESSED | SYMOPT_IGNORE_NT_SYMPATH);
+    SafeSymSetOptions(SYMOPT_IGNORE_CVREC | SYMOPT_DEBUG | SYMOPT_LOAD_LINES | SYMOPT_ALLOW_ABSOLUTE_SYMBOLS | SYMOPT_FAVOR_COMPRESSED | SYMOPT_IGNORE_NT_SYMPATH);
     GuiSymbolLogClear();
     char szServerSearchPath[MAX_PATH * 2] = "";
     sprintf_s(szServerSearchPath, "SRV*%s", szSymbolCachePath);
@@ -1443,11 +1469,11 @@ static void cbException(EXCEPTION_DEBUG_INFO* ExceptionData)
             }
         }
     }
-    const char* exceptionName = ExceptionCodeToName(ExceptionCode);
+    auto exceptionName = ExceptionCodeToName(ExceptionCode);
     if(ExceptionData->dwFirstChance) //first chance exception
     {
-        if(exceptionName)
-            dprintf("First chance exception on " fhex " (%.8X, %s)!\n", addr, ExceptionCode, exceptionName);
+        if(exceptionName.size())
+            dprintf("First chance exception on " fhex " (%.8X, %s)!\n", addr, ExceptionCode, exceptionName.c_str());
         else
             dprintf("First chance exception on " fhex " (%.8X)!\n", addr, ExceptionCode);
         SetNextDbgContinueStatus(DBG_EXCEPTION_NOT_HANDLED);
@@ -1456,8 +1482,8 @@ static void cbException(EXCEPTION_DEBUG_INFO* ExceptionData)
     }
     else //lock the exception
     {
-        if(exceptionName)
-            dprintf("Last chance exception on " fhex " (%.8X, %s)!\n", addr, ExceptionCode, exceptionName);
+        if(exceptionName.size())
+            dprintf("Last chance exception on " fhex " (%.8X, %s)!\n", addr, ExceptionCode, exceptionName.c_str());
         else
             dprintf("Last chance exception on " fhex " (%.8X)!\n", addr, ExceptionCode);
         SetNextDbgContinueStatus(DBG_CONTINUE);
@@ -2018,7 +2044,7 @@ static void debugLoopFunction(void* lpParameter, bool attach)
         if(!fdProcessInfo)
         {
             fdProcessInfo = &g_pi;
-            dprintf("Error starting process (CreateProcess, %s)!\n", ErrorCodeToName(GetLastError()));
+            dprintf("Error starting process (CreateProcess, %s)!\n", ErrorCodeToName(GetLastError()).c_str());
             unlock(WAITID_STOP);
             return;
         }

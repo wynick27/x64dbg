@@ -149,6 +149,8 @@ bool PatchEnum(PATCHINFO* List, size_t* Size)
     if(!DbgIsDebugging())
         return false;
     ASSERT_DEBUGGING("Export call");
+    if(!DbgIsDebugging())
+        return false;
     ASSERT_FALSE(!List && !Size);
     SHARED_ACQUIRE(LockPatches);
 
