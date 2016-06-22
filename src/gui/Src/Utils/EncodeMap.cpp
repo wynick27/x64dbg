@@ -40,10 +40,10 @@ bool EncodeMap::isRangeConflict(duint offset, duint size, duint codesize, duint 
         if(tmpcodelist[i] > offset + mBase && tmpcodelist[i] < offset + size + mBase)
             return true;
     }
-
+    bool isstring = type == enc_ascii || type == enc_unicode;
     for(int i = 1 + offset; i < size + offset; i++)
     {
-        if((ENCODETYPE)mBuffer[i] != enc_unknown && (ENCODETYPE)mBuffer[i] != enc_middle)
+        if((ENCODETYPE)mBuffer[i] != enc_unknown && (ENCODETYPE)mBuffer[i] != enc_middle && isstring && (ENCODETYPE)mBuffer[i] != type)
             return true;
     }
 

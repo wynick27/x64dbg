@@ -200,7 +200,7 @@ Instruction_t QBeaEngine::DisassembleAt(byte_t* data, duint size, duint instInde
     type = mEncodeMap->getDataType(origBase + origInstRVA, cp.Success() ? len : 1, tmpcodecount, tmpcodelist);
 
     if(type != enc_unknown && type != enc_code && type != enc_middle)
-        return DecodeDataAt(data, size, instIndex, origBase, origInstRVA, type);
+        return DecodeDataAt(data, size, instIndex, origBase, origInstRVA, type, tmpcodecount, tmpcodelist);
 
     auto branchType = Instruction_t::None;
     if(success && (cp.InGroup(CS_GRP_JUMP) || cp.IsLoop()))
